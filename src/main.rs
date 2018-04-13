@@ -1,6 +1,9 @@
+extern crate rand;
+
 use std::fs::File;
 use std::io::prelude::*;
 use std::{thread, time::Duration};
+use rand::{Rng, thread_rng};
 
 fn main() {
     // Setup CPU and memory
@@ -35,11 +38,6 @@ fn main() {
         println!("Opcode: {:X}", current_opcode);
 
         match current_opcode & 0xF000 {
-            0xA000 => {
-                println!("ANNN: Sets index register to the address NNN");
-                index_register = current_opcode & 0x0FFF;
-                program_counter = program_counter + 2;
-            }
             0x1000 => {
                 println!("1NNN: Jump to the address NNN");
                 program_counter = current_opcode & 0x0FFF;
@@ -115,30 +113,74 @@ fn main() {
                         let checked_add_value = registers[((current_opcode & 0x0F00) >> 8) as usize].checked_add(registers[((current_opcode & 0x00F0) >> 4) as usize]);
                         match checked_add_value {
                             Some(x) => registers[0xF as usize] = 0x01,
-                            None => registers[((current_opcode & 0x0F00) >> 8) as usize] = 0x00
+                            None => registers[0xF as usize] = 0x00
                         }
+                        registers[((current_opcode & 0x0F00) >> 8) as usize] = registers[((current_opcode & 0x0F00) >> 8) as usize].wrapping_add(registers[((current_opcode & 0x00F0) >> 4) as usize]);
                         program_counter = program_counter + 2;
                     }
                     0x0005 => {
                         println!("8XY5: VY is subtracted from VX. VF is set to 0 when there's a borrow, and 1 when there isn't.");
                         let checked_sub_value = registers[((current_opcode & 0x0F00) >> 8) as usize].checked_sub(registers[((current_opcode & 0x00F0) >> 4) as usize]);
                         match checked_sub_value {
-                            Some(x) => registers[0xF as usize] = 0x01,
-                            None => registers[((current_opcode & 0x0F00) >> 8) as usize] = 0x00
+                            Some(x) => registers[0xF as usize] = 0x00,
+                            None => registers[0xF as usize] = 0x01
                         }
+                        registers[((current_opcode & 0x0F00) >> 8) as usize] = registers[((current_opcode & 0x0F00) >> 8) as usize].wrapping_sub(registers[((current_opcode & 0x00F0) >> 4) as usize]);
                         program_counter = program_counter + 2;
                     }
                     0x0006 => {
                         println!("8XY6: Shifts VY right by one and copies the result to VX. VF is set to the value of the least significant bit of VY before the shift.");
-                        registers[0xF as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize] & 0x000F;
+                        registers[0xF as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize] & 0b0000_0001;
                         registers[((current_opcode & 0x00F0) >> 4) as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize] >> 1;
-                        registers[((current_opcode & 0x0F00) >> 4) as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize];
+                        registers[((current_opcode & 0x0F00) >> 8) as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize];
+                    }
+                    0x0007 => {
+                        println!("8XY7: Sets VX to VY minus VX. VF is set to 0 when there's a borrow, and 1 when there isn't.");
+                        let checked_sub_value = registers[((current_opcode & 0x00F0) >> 8) as usize].checked_sub(registers[((current_opcode & 0x0F00) >> 4) as usize]);
+                        match checked_sub_value {
+                            Some(x) => registers[0xF as usize] = 0x00,
+                            None => registers[0xF as usize] = 0x01
+                        }
+                        registers[((current_opcode & 0x0F00) >> 8) as usize] = registers[((current_opcode & 0x00F0) >> 8) as usize].wrapping_sub(registers[((current_opcode & 0x0F00) >> 4) as usize]);
+                        program_counter = program_counter + 2;
+                    }
+                    0x000E => {
+                        println!("8XYE: Shifts VY left by one and copies the result to VX. VF is set to the value of the most significant bit of VY before the shift.");
+                        registers[0xF as usize] = (registers[((current_opcode & 0x00F0) >> 4) as usize] & 0b1000_0000) >> 7;
+                        registers[((current_opcode & 0x00F0) >> 4) as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize] << 1;
+                        registers[((current_opcode & 0x0F00) >> 8) as usize] = registers[((current_opcode & 0x00F0) >> 4) as usize];
                     }
                     _ => {
                         println!("Unknown opcode: {:X}", current_opcode);
                         program_counter = program_counter + 2;
                     }
                 }
+            }
+            0x9000 => {
+                println!("9XY0: Skips the next instruction if VX doesn't equal VY. (Usually the next instruction is a jump to skip a code block");
+                if registers[((current_opcode & 0x0F00) >> 8) as usize] != registers[((current_opcode & 0x00F0) >> 4) as usize] {
+                    program_counter = program_counter + 4;
+                } else {
+                    program_counter = program_counter + 2;
+                }
+            }
+            0xA000 => {
+                println!("ANNN: Sets index register to the address NNN");
+                index_register = current_opcode & 0x0FFF;
+                program_counter = program_counter + 2;
+            }
+            0xB000 => {
+                println!("BNNN: Jumps to the address NNN plus V0");
+                program_counter = (current_opcode & 0x0FFF) + registers[0x0 as usize] as u16;
+            }
+            0xC000 => {
+                println!("CXNN: Sets VX to the result of a bitwise and operation on a random number (Typically: 0 to 255) and NN");
+                registers[((current_opcode & 0x0F00) >> 8) as usize] = ((current_opcode & 0x00FF) & thread_rng().gen_range(0, 255)) as u8;
+                program_counter = program_counter + 2;
+            }
+            0xD000 => {
+                println!("DXYN: Draws a sprite at coordinate (VX, VY) that has a width of 8 pixels and a height of N pixels. Each row of 8 pixels is read as bit-coded starting from memory location I; I value doesn’t change after the execution of this instruction. As described above, VF is set to 1 if any screen pixels are flipped from set to unset when the sprite is drawn, and to 0 if that doesn’t happen");
+                program_counter = program_counter + 2;
             }
             0x0000 => {
                 match current_opcode & 0x000F {
