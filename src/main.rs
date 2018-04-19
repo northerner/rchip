@@ -1,9 +1,30 @@
 extern crate rand;
+extern crate sdl2;
 
 use std::fs::File;
 use std::io::prelude::*;
 use std::{thread, time::Duration};
 use rand::{Rng, thread_rng};
+use sdl2::pixels;
+use sdl2::event::Event;
+use sdl2::rect::{Point, Rect};
+use sdl2::render::Canvas;
+use sdl2::video::Window;
+
+fn draw(canvas: &mut Canvas<Window>, screen: &Vec<u64>) {
+    for (x, row) in screen.iter().enumerate() {
+        for column in 63..0 {
+            if (row & (1 << column) != 0) {
+                canvas.set_draw_color(pixels::Color::RGB(0, 0, 0));
+                canvas.draw_point((x as i32, column as i32)).unwrap();
+            } else {
+                canvas.set_draw_color(pixels::Color::RGB(255, 255, 255));
+                canvas.draw_point((x as i32, column as i32)).unwrap();
+            }
+        }
+    }
+    canvas.present()
+}
 
 fn main() {
     // Setup CPU and memory
@@ -15,6 +36,26 @@ fn main() {
     let mut registers: Vec<u8> = vec![0; 16];
     let mut memory: Vec<u8> = vec![0; 0x1000];
     let mut stack: Vec<u16> = vec![0; 16];
+    let mut screen: Vec<u64> = vec![0; 32];
+
+    // Setup graphics
+    const SCREEN_WIDTH: u32 = 640;
+    const SCREEN_HEIGHT: u32 = 320;
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsys = sdl_context.video().unwrap();
+    let window = video_subsys.window("rchip", SCREEN_WIDTH, SCREEN_HEIGHT)
+        .position_centered()
+        .opengl()
+        .build()
+        .unwrap();
+    let mut canvas = window.into_canvas().build().unwrap();
+    canvas.set_draw_color(pixels::Color::RGB(0, 0, 0));
+    canvas.clear();
+    let mut events = sdl_context.event_pump().unwrap();
+    canvas.set_draw_color(pixels::Color::RGB(255, 255, 255));
+    //canvas.fill_rect(Rect::new(10, 10, 10, 10)).unwrap();
+    canvas.set_scale(10.0, 10.0).unwrap();
+    canvas.present();
 
     // Load rom
     let mut rom = File::open("pong.rom").expect("ROM file missing");
@@ -28,7 +69,14 @@ fn main() {
     }
 
     // Main loop
-    loop {
+    'main: loop {
+        for event in events.poll_iter() {
+            match event {
+                Event::Quit {..} => break 'main,
+                _ => {}
+            }
+        }
+
         current_opcode = ((memory[program_counter as usize] as u16) << 8) | (memory[(program_counter + 1) as usize] as u16);
         println!("Program counter: {:X}", program_counter);
         println!("Index regster: {:X}", index_register);
@@ -180,6 +228,15 @@ fn main() {
             }
             0xD000 => {
                 println!("DXYN: Draws a sprite at coordinate (VX, VY) that has a width of 8 pixels and a height of N pixels. Each row of 8 pixels is read as bit-coded starting from memory location I; I value doesn’t change after the execution of this instruction. As described above, VF is set to 1 if any screen pixels are flipped from set to unset when the sprite is drawn, and to 0 if that doesn’t happen");
+                let x = registers[((current_opcode & 0x0F00) >> 8) as usize];
+                let y = registers[((current_opcode & 0x00F0) >> 4) as usize];
+                let height = registers[(current_opcode & 0x000F) as usize];
+
+                for line in 0..height {
+                    let line_pixels = memory[(index_register + line as u16) as usize];
+                    screen[(x + line) as usize] = 1 as u64;
+                }
+
                 program_counter = program_counter + 2;
             }
             0x0000 => {
@@ -199,6 +256,7 @@ fn main() {
             }
         }
 
+        draw(&mut canvas, &screen);
         thread::sleep(Duration::from_millis(500));
         print!("{}[2J", 27 as char);
     }
